@@ -7,7 +7,7 @@ Caution: Docker-socket is exposed to container, may cause security issues.
 
 Build image: <br>
 ```
-docker build -t syncdocker:tag .
+docker build -t syncdocker:latest .
 ```
 
 Run image: <br>
