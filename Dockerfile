@@ -19,12 +19,3 @@ COPY --from=builder /usr/local/bin/app .
 RUN ls /root
 
 CMD ["./app"]
-
-
-# build image:
-# docker build -t ligainsider/syncdocker:latest .
-
-# build image:
-# dockebuild -t dockersync .
-
-# run container
