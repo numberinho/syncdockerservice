@@ -1,24 +1,30 @@
-FROM golang:1.19
+# syntax=docker/dockerfile:1
 
-WORKDIR /usr/src/app
+FROM golang:1.19 AS builder
+WORKDIR /usr/local/bin/app
 
 # pre-copy/cache go.mod for pre-downloading dependencies and only redownloading them in subsequent builds if they change
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 
 COPY . .
-RUN go build -v -o /usr/local/bin/app ./...
+RUN CGO_ENABLED=0 GOOD=linux go build -v -o app ./...
 
-CMD ["app"]
+FROM alpine:latest  
+RUN apk --no-cache add ca-certificates
+
+WORKDIR /root/
+
+COPY --from=builder /usr/local/bin/app .
+RUN ls /root
+
+CMD ["./app"]
+
 
 # build image:
-# docker build -t dockersync .
+# docker build -t ligainsider/syncdocker:latest .
+
+# build image:
+# dockebuild -t dockersync .
 
 # run container
-#docker run --rm -d -p 3333:3333 -v /var/run/docker.sock:/var/run/docker.sock \
-#    -e ENV_REPO="redis" \
-#    -e ENV_TAG=":latest" \
-#    -e ENV_SERVICE_ID="mw682hmq9o2a" \
-#    -e ENV_WEBHOOK_TOKEN="BbHw3mvGZBUCsKE2XL0ck4F9bHt0jz4g72Nm55aPq7DJnzr80W" \
-#    -e ENV_SERVICESYNC_PORT="3333" \
-#    dockersync
