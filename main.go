@@ -67,14 +67,16 @@ func syncDockerService(w http.ResponseWriter, req *http.Request) {
 
 	fmt.Println("Incoming request found for image: " + params.Repository.Repo_name + ":" + params.Push_data.Tag)
 
-	if params.Repository.Repo_name+params.Push_data.Tag == ENV_REPO+ENV_TAG {
+	if params.Repository.Repo_name == ENV_REPO && params.Push_data.Tag == ENV_TAG {
 		err := updateService(ENV_SERVICE, ENV_REPO+ENV_TAG)
 		if err != nil {
 			http.Get(params.Callback_url)
 		}
 		fmt.Printf("err: %v\n", err)
 	} else {
-		fmt.Println("Image is not being watched: " + params.Repository.Repo_name + params.Push_data.Tag + " != " + ENV_REPO + ENV_TAG)
+		fmt.Println("Image is not being watched:")
+		fmt.Println("IMAGE: " + params.Repository.Repo_name + " -> " + ENV_REPO)
+		fmt.Println("TAG: " + params.Push_data.Tag + " -> " + ENV_TAG)
 	}
 }
 
