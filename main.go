@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -39,7 +40,7 @@ type DockerWebhookRequest struct {
 	}
 }
 
-var ENV_REPO, ENV_TAG, ENV_SERVICE, ENV_WEBHOOK_TOKEN, ENV_SERVICESYNC_PORT, UPDATE_IMAGE string
+var ENV_REPO, ENV_TAG, ENV_SERVICE, ENV_WEBHOOK_TOKEN, ENV_SERVICESYNC_PORT, ENV_USERNAME, ENV_PASSWORD, UPDATE_IMAGE string
 
 func main() {
 
@@ -49,6 +50,9 @@ func main() {
 	ENV_SERVICE = os.Getenv("ENV_SERVICE")
 	ENV_WEBHOOK_TOKEN = os.Getenv("ENV_WEBHOOK_TOKEN")
 	ENV_SERVICESYNC_PORT = os.Getenv("ENV_SERVICESYNC_PORT")
+
+	ENV_USERNAME = os.Getenv("ENV_USERNAME")
+	ENV_PASSWORD = os.Getenv("ENV_PASSWORD")
 
 	// set image to update
 	if ENV_TAG != "" {
@@ -78,10 +82,7 @@ func syncDockerService(w http.ResponseWriter, req *http.Request) {
 	log.Println("Incoming request found for image: " + params.Repository.Repo_name + ":" + params.Push_data.Tag)
 
 	if params.Repository.Repo_name == ENV_REPO && params.Push_data.Tag == ENV_TAG {
-		err := updateService()
-		if err != nil {
-			log.Printf("err: %v\n", err)
-		}
+		go updateService()
 		http.Get(params.Callback_url)
 	} else {
 		log.Println("Image is not being watched:")
@@ -98,6 +99,19 @@ func updateService() error {
 		log.Printf("cli: %v\n", cli)
 		return err
 	}
+	// login docker hub
+	_, err = cli.RegistryLogin(context.Background(), types.AuthConfig{Username: ENV_USERNAME, Password: ENV_PASSWORD})
+	if err == nil {
+		// pull new image
+		log.Println("Pulling new image")
+		out, err := cli.ImagePull(context.Background(), UPDATE_IMAGE, types.ImagePullOptions{Platform: "linux/amd64"})
+		if err != nil {
+			panic(err)
+		}
+		defer out.Close()
+		io.Copy(os.Stdout, out)
+
+	}
 
 	// scan running service
 	service, _, err := cli.ServiceInspectWithRaw(context.Background(), ENV_SERVICE, types.ServiceInspectOptions{})
@@ -110,6 +124,7 @@ func updateService() error {
 	service.Spec.TaskTemplate.ContainerSpec.Image = UPDATE_IMAGE
 	service.Spec.TaskTemplate.ForceUpdate = uint64(time.Now().Unix())
 
+	log.Println("Updating service")
 	// send update request to docker socket
 	serviceResponse, err := cli.ServiceUpdate(
 		context.Background(),
@@ -125,5 +140,7 @@ func updateService() error {
 
 	// close client interface
 	cli.Close()
+
+	log.Println("Done!")
 	return nil
 }
