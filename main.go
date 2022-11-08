@@ -8,11 +8,20 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/docker/docker/api/types"
+	dockercontainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
 )
+
+type Cnf struct {
+	Repository    string `json:"Repository"`
+	Image         string `json:"Image"`
+	Tag           string `json:"Tag"`
+	Containerport string `json:"Containerport"`
+	Hostport      string `json:"Hostport"`
+}
 
 type DockerWebhookRequest struct {
 	Callback_url string
@@ -40,33 +49,21 @@ type DockerWebhookRequest struct {
 	}
 }
 
-var ENV_REPO, ENV_TAG, ENV_SERVICE, ENV_WEBHOOK_TOKEN, ENV_SERVICESYNC_PORT, ENV_USERNAME, ENV_PASSWORD, UPDATE_IMAGE string
+// global configuration variables
+var ENV_WEBHOOK_TOKEN, ENV_SERVICESYNC_PORT, ENV_USERNAME, ENV_PASSWORD string
+var Config []Cnf
 
 func main() {
 
 	// read environment variables
-	ENV_REPO = os.Getenv("ENV_REPO")
-	ENV_TAG = os.Getenv("ENV_TAG")
-	ENV_SERVICE = os.Getenv("ENV_SERVICE")
-	ENV_WEBHOOK_TOKEN = os.Getenv("ENV_WEBHOOK_TOKEN")
-	ENV_SERVICESYNC_PORT = os.Getenv("ENV_SERVICESYNC_PORT")
+	ENV_SERVICESYNC_PORT = os.Getenv("ENV_SERVICESYNC_PORT") // port on which to listen for requests
+	ENV_WEBHOOK_TOKEN = os.Getenv("ENV_WEBHOOK_TOKEN")       //docker hub webhook token
+	ENV_USERNAME = os.Getenv("ENV_USERNAME")                 //docker hub username
+	ENV_PASSWORD = os.Getenv("ENV_PASSWORD")                 //docker hub password
 
-	ENV_USERNAME = os.Getenv("ENV_USERNAME")
-	ENV_PASSWORD = os.Getenv("ENV_PASSWORD")
-
-	// set image to update
-	if ENV_TAG != "" {
-		UPDATE_IMAGE = ENV_REPO + ":" + ENV_TAG
-	} else {
-		UPDATE_IMAGE = ENV_REPO
-	}
-
-	log.Printf("ENV_REPO: %v\n", ENV_REPO)
-	log.Printf("ENV_TAG: %v\n", ENV_TAG)
-	log.Printf("ENV_SERVICE: %v\n", ENV_SERVICE)
-	log.Printf("ENV_WEBHOOK_TOKEN: %v\n", ENV_WEBHOOK_TOKEN)
-	log.Printf("ENV_SERVICESYNC_PORT: %v\n", ENV_SERVICESYNC_PORT)
-	log.Printf("UPDATE_IMAGE: %v\n", UPDATE_IMAGE)
+	// read container configs
+	file, _ := os.ReadFile("config.json")
+	_ = json.Unmarshal([]byte(file), &Config)
 
 	// start webserver
 	http.HandleFunc("/webhooks/"+ENV_WEBHOOK_TOKEN, syncDockerService)
@@ -81,17 +78,19 @@ func syncDockerService(w http.ResponseWriter, req *http.Request) {
 	json.Unmarshal(body, &params)
 	log.Println("Incoming request found for image: " + params.Repository.Repo_name + ":" + params.Push_data.Tag)
 
-	if params.Repository.Repo_name == ENV_REPO && params.Push_data.Tag == ENV_TAG {
-		go updateService()
-		http.Get(params.Callback_url)
-	} else {
-		log.Println("Image is not being watched:")
-		log.Println("IMAGE: " + params.Repository.Repo_name + " -> " + ENV_REPO)
-		log.Println("TAG: " + params.Push_data.Tag + " -> " + ENV_TAG)
+	for _, c := range Config {
+		if params.Repository.Repo_name == c.Repository && params.Push_data.Tag == c.Tag {
+			go runContainer(c)
+			http.Get(params.Callback_url)
+		} else {
+			log.Println("Image is not being watched:")
+			log.Println("IMAGE: " + params.Repository.Repo_name)
+			log.Println("TAG: " + params.Push_data.Tag)
+		}
 	}
 }
 
-func updateService() error {
+func runContainer(config Cnf) error {
 
 	// start new docker client
 	cli, err := client.NewClientWithOpts(client.FromEnv)
@@ -99,43 +98,63 @@ func updateService() error {
 		log.Printf("cli: %v\n", cli)
 		return err
 	}
+	defer cli.Close()
+
 	// login docker hub
 	_, err = cli.RegistryLogin(context.Background(), types.AuthConfig{Username: ENV_USERNAME, Password: ENV_PASSWORD})
 	if err == nil {
-		// pull new image
-		log.Println("Pulling new image")
-		out, err := cli.ImagePull(context.Background(), UPDATE_IMAGE, types.ImagePullOptions{Platform: "linux/amd64"})
-		if err != nil {
-			panic(err)
+		return err
+	}
+
+	// pull new image
+	log.Println("Pulling new image")
+	out, err := cli.ImagePull(context.Background(), config.Repository+"/"+config.Image+":"+config.Tag, types.ImagePullOptions{Platform: "linux/amd64"})
+	if err != nil {
+		log.Println(err)
+	}
+	defer out.Close()
+	io.Copy(os.Stdout, out)
+
+	// scan running containers
+	containers, err := cli.ContainerList(context.Background(), types.ContainerListOptions{})
+	if err != nil {
+		log.Println(err)
+	}
+
+	// if image is already running, stop it
+	for _, container := range containers {
+		if container.Image == config.Image {
+			if err := cli.ContainerStop(context.Background(), container.ID, nil); err != nil {
+				log.Println(err)
+			}
+
 		}
-		defer out.Close()
-		io.Copy(os.Stdout, out)
-
+		log.Println("stopped ", container.Image)
 	}
 
-	// scan running service
-	service, _, err := cli.ServiceInspectWithRaw(context.Background(), ENV_SERVICE, types.ServiceInspectOptions{})
+	// create new container
+	resp, err := cli.ContainerCreate(context.Background(),
+		&dockercontainer.Config{
+			Image: config.Repository + "/" + config.Image + ":" + config.Tag,
+			ExposedPorts: nat.PortSet{
+				nat.Port(config.Containerport + "/tcp"): {},
+			},
+		},
+		&dockercontainer.HostConfig{
+			Binds: []string{
+				"/var/run/docker.sock:/var/run/docker.sock",
+			},
+			PortBindings: nat.PortMap{
+				nat.Port(config.Containerport + "/tcp"): []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: config.Hostport}},
+			},
+		}, nil, nil, "")
 	if err != nil {
-		log.Printf("service: %v\n", service)
-		return err
+		panic(err)
 	}
 
-	// update service
-	service.Spec.TaskTemplate.ContainerSpec.Image = UPDATE_IMAGE
-	service.Spec.TaskTemplate.ForceUpdate = uint64(time.Now().Unix())
-
-	log.Println("Updating service")
-	// send update request to docker socket
-	serviceResponse, err := cli.ServiceUpdate(
-		context.Background(),
-		service.ID,
-		service.Meta.Version,
-		service.Spec,
-		types.ServiceUpdateOptions{})
-
-	if err != nil {
-		log.Printf("serviceResponse: %v\n", serviceResponse)
-		return err
+	// run new container
+	if err := cli.ContainerStart(context.Background(), resp.ID, types.ContainerStartOptions{}); err != nil {
+		panic(err)
 	}
 
 	// close client interface
