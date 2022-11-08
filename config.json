@@ -1,16 +1,20 @@
 [
     {
-        "repository": "ligainsider",
-        "image": "newbackend",
+        "repository": "ligainsider/newbackend",
         "tag": "latest",
         "containerport": 80,
         "hostport": 3000
     },
     {
-        "repository": "ligainsider",
-        "image": "dev",
+        "repository": "ligainsider/newbackend",
         "tag": "latest",
         "containerport": 80,
         "hostport": 3001
+    },
+    {
+        "repository": "ligainsider/newbackend",
+        "tag": "latest",
+        "containerport": 80,
+        "hostport": 3002
     }
 ]

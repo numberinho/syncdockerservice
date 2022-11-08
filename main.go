@@ -61,11 +61,13 @@ func main() {
 	ENV_USERNAME = os.Getenv("ENV_USERNAME")                 //docker hub username
 	ENV_PASSWORD = os.Getenv("ENV_PASSWORD")                 //docker hub password
 
+	log.Println("Reading config...")
 	// read container configs
 	file, _ := os.ReadFile("config.json")
 	_ = json.Unmarshal([]byte(file), &Config)
 
 	// start webserver
+	log.Println("Starting webserver...")
 	http.HandleFunc("/webhooks/"+ENV_WEBHOOK_TOKEN, syncDockerService)
 	http.ListenAndServe(":"+ENV_SERVICESYNC_PORT, nil)
 }
@@ -95,7 +97,7 @@ func runContainer(config Cnf) error {
 	// start new docker client
 	cli, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
-		log.Printf("cli: %v\n", cli)
+		log.Println(err)
 		return err
 	}
 	defer cli.Close()
@@ -103,19 +105,22 @@ func runContainer(config Cnf) error {
 	// login docker hub
 	_, err = cli.RegistryLogin(context.Background(), types.AuthConfig{Username: ENV_USERNAME, Password: ENV_PASSWORD})
 	if err == nil {
+		log.Println(err)
 		return err
 	}
 
 	// pull new image
 	log.Println("Pulling new image")
-	out, err := cli.ImagePull(context.Background(), config.Repository+"/"+config.Image+":"+config.Tag, types.ImagePullOptions{Platform: "linux/amd64"})
+	out, err := cli.ImagePull(context.Background(), config.Repository+":"+config.Tag, types.ImagePullOptions{Platform: "linux/amd64"})
 	if err != nil {
 		log.Println(err)
+		return err
 	}
 	defer out.Close()
 	io.Copy(os.Stdout, out)
 
 	// scan running containers
+	log.Println("Scanning for running containrs")
 	containers, err := cli.ContainerList(context.Background(), types.ContainerListOptions{})
 	if err != nil {
 		log.Println(err)
@@ -123,11 +128,12 @@ func runContainer(config Cnf) error {
 
 	// if image is already running, stop it
 	for _, container := range containers {
-		if container.Image == config.Image {
+		log.Println(container.Image)
+		if container.Image == config.Repository+":"+config.Tag {
+			log.Println("Image is not being watched:")
 			if err := cli.ContainerStop(context.Background(), container.ID, nil); err != nil {
 				log.Println(err)
 			}
-
 		}
 		log.Println("stopped ", container.Image)
 	}
@@ -135,7 +141,7 @@ func runContainer(config Cnf) error {
 	// create new container
 	resp, err := cli.ContainerCreate(context.Background(),
 		&dockercontainer.Config{
-			Image: config.Repository + "/" + config.Image + ":" + config.Tag,
+			Image: config.Repository + ":" + config.Tag,
 			ExposedPorts: nat.PortSet{
 				nat.Port(config.Containerport + "/tcp"): {},
 			},
