@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/docker/docker/api/types"
 	dockercontainer "github.com/docker/docker/api/types/container"
@@ -84,10 +86,6 @@ func syncDockerService(w http.ResponseWriter, req *http.Request) {
 		if params.Repository.Repo_name == c.Repository && params.Push_data.Tag == c.Tag {
 			go runContainer(c)
 			http.Get(params.Callback_url)
-		} else {
-			log.Println("Image is not being watched:")
-			log.Println("IMAGE: " + params.Repository.Repo_name)
-			log.Println("TAG: " + params.Push_data.Tag)
 		}
 	}
 }
@@ -95,72 +93,83 @@ func syncDockerService(w http.ResponseWriter, req *http.Request) {
 func runContainer(config Cnf) error {
 
 	// start new docker client
-	cli, err := client.NewClientWithOpts(client.FromEnv)
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		log.Println(err)
-		return err
+		log.Println("Err: Newclient: ", err)
 	}
 	defer cli.Close()
 
-	// login docker hub
-	_, err = cli.RegistryLogin(context.Background(), types.AuthConfig{Username: ENV_USERNAME, Password: ENV_PASSWORD})
-	if err == nil {
-		log.Println(err)
-		return err
+	authConfig := types.AuthConfig{
+		Username: ENV_USERNAME,
+		Password: ENV_PASSWORD,
 	}
+	encodedJSON, err := json.Marshal(authConfig)
+	if err != nil {
+		panic(err)
+	}
+	authStr := base64.URLEncoding.EncodeToString(encodedJSON)
 
 	// pull new image
-	log.Println("Pulling new image")
-	out, err := cli.ImagePull(context.Background(), config.Repository+":"+config.Tag, types.ImagePullOptions{Platform: "linux/amd64"})
+	log.Printf("Pulling new image '%s:%s'\n", config.Repository, config.Tag)
+	out, err := cli.ImagePull(context.Background(), config.Repository+":"+config.Tag, types.ImagePullOptions{RegistryAuth: authStr, Platform: "linux/amd64"})
 	if err != nil {
-		log.Println(err)
+		log.Println("Err: ImagePull: ", err)
 		return err
 	}
 	defer out.Close()
 	io.Copy(os.Stdout, out)
 
 	// scan running containers
-	log.Println("Scanning for running containrs")
+	log.Println("Start scan running containers.")
 	containers, err := cli.ContainerList(context.Background(), types.ContainerListOptions{})
 	if err != nil {
-		log.Println(err)
+		log.Println("Running containers: ", err)
 	}
 
-	// if image is already running, stop it
+	log.Println("Checking if port is already in use.")
+	// if port is already in use, stop container using it.
 	for _, container := range containers {
-		log.Println(container.Image)
-		if container.Image == config.Repository+":"+config.Tag {
-			log.Println("Image is not being watched:")
-			if err := cli.ContainerStop(context.Background(), container.ID, nil); err != nil {
-				log.Println(err)
+		for _, p := range container.Ports {
+			hp, _ := strconv.Atoi(config.Hostport)
+			if p.PublicPort == uint16(hp) {
+				log.Printf("Port %d, is being used by %s\n", p.PublicPort, container.Image)
+				err := cli.ContainerStop(context.Background(), container.ID, nil)
+				if err != nil {
+					log.Println("Err: ContainerStop: ", err)
+				}
+				log.Printf("Stopped %s. Hostport %d is now free.\n", container.Image, p.PublicPort)
 			}
 		}
-		log.Println("stopped ", container.Image)
 	}
 
 	// create new container
+	log.Println("Creating new container")
 	resp, err := cli.ContainerCreate(context.Background(),
 		&dockercontainer.Config{
 			Image: config.Repository + ":" + config.Tag,
 			ExposedPorts: nat.PortSet{
-				nat.Port(config.Containerport + "/tcp"): {},
+				nat.Port(config.Containerport + "/tcp"): struct{}{},
 			},
 		},
 		&dockercontainer.HostConfig{
-			Binds: []string{
-				"/var/run/docker.sock:/var/run/docker.sock",
-			},
 			PortBindings: nat.PortMap{
-				nat.Port(config.Containerport + "/tcp"): []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: config.Hostport}},
+				nat.Port(config.Containerport + "/tcp"): []nat.PortBinding{
+					{
+						HostIP:   "0.0.0.0",
+						HostPort: config.Hostport,
+					},
+				},
 			},
 		}, nil, nil, "")
 	if err != nil {
-		panic(err)
+		log.Println("Err: Creating new container: ", err)
 	}
 
 	// run new container
-	if err := cli.ContainerStart(context.Background(), resp.ID, types.ContainerStartOptions{}); err != nil {
-		panic(err)
+	log.Println("Starting new container.")
+	err = cli.ContainerStart(context.Background(), resp.ID, types.ContainerStartOptions{})
+	if err != nil {
+		log.Println("Err: Starting new container: ", err)
 	}
 
 	// close client interface

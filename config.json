@@ -2,19 +2,19 @@
     {
         "repository": "ligainsider/newbackend",
         "tag": "latest",
-        "containerport": 80,
-        "hostport": 3000
+        "containerport": "80",
+        "hostport": "3000"
     },
     {
         "repository": "ligainsider/newbackend",
-        "tag": "latest",
-        "containerport": 80,
-        "hostport": 3001
+        "tag": "dev1",
+        "containerport": "80",
+        "hostport": "3001"
     },
     {
         "repository": "ligainsider/newbackend",
-        "tag": "latest",
-        "containerport": 80,
-        "hostport": 3002
+        "tag": "dev2",
+        "containerport": "80",
+        "hostport": "3002"
     }
 ]
