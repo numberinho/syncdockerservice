@@ -7,14 +7,8 @@
     },
     {
         "repository": "ligainsider/newbackend",
-        "tag": "dev1",
+        "tag": "dev",
         "containerport": "80",
         "hostport": "3001"
-    },
-    {
-        "repository": "ligainsider/newbackend",
-        "tag": "dev2",
-        "containerport": "80",
-        "hostport": "3002"
     }
 ]
