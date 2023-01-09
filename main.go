@@ -83,7 +83,7 @@ func syncDockerService(w http.ResponseWriter, req *http.Request) {
 	log.Println("Incoming request found for image: " + params.Repository.Repo_name + ":" + params.Push_data.Tag)
 
 	for _, c := range Config {
-		if params.Repository.Repo_name == c.Repository && params.Push_data.Tag == c.Tag {
+		if params.Push_data.Tag == c.Tag {
 			go runContainer(c)
 			http.Get(params.Callback_url)
 		}
@@ -96,6 +96,7 @@ func runContainer(config Cnf) error {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		log.Println("Err: Newclient: ", err)
+		return err
 	}
 	defer cli.Close()
 
@@ -105,7 +106,7 @@ func runContainer(config Cnf) error {
 	}
 	encodedJSON, err := json.Marshal(authConfig)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	authStr := base64.URLEncoding.EncodeToString(encodedJSON)
 
@@ -136,6 +137,7 @@ func runContainer(config Cnf) error {
 				err := cli.ContainerStop(context.Background(), container.ID, nil)
 				if err != nil {
 					log.Println("Err: ContainerStop: ", err)
+					return err
 				}
 				log.Printf("Stopped %s. Hostport %d is now free.\n", container.Image, p.PublicPort)
 			}
@@ -161,8 +163,10 @@ func runContainer(config Cnf) error {
 				},
 			},
 		}, nil, nil, "")
+
 	if err != nil {
 		log.Println("Err: Creating new container: ", err)
+		return err
 	}
 
 	// run new container
@@ -170,6 +174,7 @@ func runContainer(config Cnf) error {
 	err = cli.ContainerStart(context.Background(), resp.ID, types.ContainerStartOptions{})
 	if err != nil {
 		log.Println("Err: Starting new container: ", err)
+		return err
 	}
 
 	// close client interface

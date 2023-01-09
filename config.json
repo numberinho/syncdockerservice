@@ -10,5 +10,11 @@
         "tag": "dev",
         "containerport": "80",
         "hostport": "3001"
+    },
+    {
+        "repository": "ligainsider/newbackend",
+        "tag": "videotools",
+        "containerport": "80",
+        "hostport": "3002"
     }
 ]
